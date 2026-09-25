@@ -48,9 +48,14 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
         method: 'POST',
         headers: { 'x-user-id': userId }
       });
-      const data = await res.json();
-      if (data?.publicBridgeUrl) {
-        setActivePackage((prev) => prev ? { ...prev, publicBridgeUrl: data.publicBridgeUrl } : prev);
+      if (res.ok) {
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          if (data?.publicBridgeUrl) {
+            setActivePackage((prev) => (prev ? { ...prev, publicBridgeUrl: data.publicBridgeUrl } : prev));
+          }
+        } catch (_) {}
       }
     } catch (e) {
       console.warn('Public bridge request failed:', e);
@@ -150,8 +155,21 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
         body: formData
       });
 
-      const data: StagedPackageResult = await res.json();
-      if (!res.ok) throw new Error((data as any).error || 'Staging failed');
+      const responseText = await res.text();
+      let data: StagedPackageResult | null = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (_) {
+        // Not a JSON payload (could be proxy or gateway error)
+      }
+
+      if (!res.ok || !data || !(data as any).success) {
+        const serverMsg = (data as any)?.error;
+        const fallbackMsg = responseText.length > 0 && responseText.length < 200
+          ? responseText
+          : `Server returned HTTP status ${res.status}`;
+        throw new Error(serverMsg || fallbackMsg || 'Staging failed');
+      }
 
       setActivePackage(data);
       onPackageStaged(data);
@@ -179,7 +197,8 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
 
       setStagedFiles(stagedList);
     } catch (err: any) {
-      alert('Staging error: ' + err.message);
+      console.error('[KaifDrop Staging Error]', err);
+      alert('Staging error: ' + (err.message || 'Failed to stage files'));
     } finally {
       setIsProcessing(false);
     }

@@ -435,19 +435,17 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
     stagedRegistry.set(packageId, stagedPkg);
     updateTransferMetric(totalBytes, 'sent');
 
-    // Attempt automatic zero-403 public bridge link generation
-    let publicBridgeUrl: string | undefined = undefined;
+    // Start public bridge upload asynchronously in background (NEVER block the HTTP response)
     const bridgeFilePath = isZipMatrix && zipFilePath ? zipFilePath : processedFiles[0]?.storedPath;
     if (bridgeFilePath && fs.existsSync(bridgeFilePath)) {
-      try {
-        const uploadedUrl = await uploadToPublicBridge(bridgeFilePath, stagedPkg.name);
-        if (uploadedUrl) {
-          publicBridgeUrl = uploadedUrl;
-          stagedPkg.publicBridgeUrl = uploadedUrl;
-        }
-      } catch (e) {
-        console.warn('Initial public bridge upload deferred:', e);
-      }
+      uploadToPublicBridge(bridgeFilePath, stagedPkg.name)
+        .then((url) => {
+          if (url) {
+            stagedPkg.publicBridgeUrl = url;
+            console.log(`[KaifDrop Bridge] Public mobile bridge ready for ${packageId}: ${url}`);
+          }
+        })
+        .catch((e) => console.warn('[KaifDrop Bridge] Background bridge upload error:', e));
     }
 
     const hostHeader = req.get('host') || `localhost:${PORT}`;
@@ -472,7 +470,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
       jwtToken,
       directDownloadUrl,
       mobileLandingUrl,
-      publicBridgeUrl,
+      publicBridgeUrl: stagedPkg.publicBridgeUrl,
       has3DAsset,
       manifestInjected: has3DAsset
     });
@@ -482,7 +480,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
   }
 });
 
-// Helper for zero-403 public mobile bridge
+// Helper for zero-403 public mobile bridge (Non-blocking external gateway)
 async function uploadToPublicBridge(filePath: string, fileName: string): Promise<string | null> {
   try {
     if (!fs.existsSync(filePath)) return null;
@@ -501,10 +499,13 @@ async function uploadToPublicBridge(filePath: string, fileName: string): Promise
     clearTimeout(timeoutId);
 
     if (res.ok) {
-      const data: any = await res.json();
-      if (data?.data?.url) {
-        return data.data.url;
-      }
+      const text = await res.text();
+      try {
+        const data: any = JSON.parse(text);
+        if (data?.data?.url) {
+          return data.data.url;
+        }
+      } catch (_) {}
     }
     return null;
   } catch (err) {
@@ -514,7 +515,7 @@ async function uploadToPublicBridge(filePath: string, fileName: string): Promise
 }
 
 // Generate or retrieve public bridge download link (Zero 403 for physical mobile scanning)
-app.post('/api/transfer/public-bridge/:stageId', async (req, res) => {
+app.all(['/api/transfer/public-bridge/:stageId'], async (req, res) => {
   const { stageId } = req.params;
   const pkg = stagedRegistry.get(stageId);
   if (!pkg) {
@@ -1046,6 +1047,21 @@ app.get('/api/java-project/download', async (req, res) => {
     console.error('Failed to bundle Java project:', err);
     res.status(500).send('Error packaging Java project');
   }
+});
+
+// Ensure any unhandled /api route returns JSON 404, never falling into Vite HTML SPA fallback
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API endpoint ${req.method} ${req.path} not found` });
+});
+
+// Global Express error handler to guarantee all API errors are returned as JSON, never unhandled HTML
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[KaifDrop Server Error]', err);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({
+    error: err.message || 'An unexpected server error occurred',
+    code: err.code || 'INTERNAL_SERVER_ERROR'
+  });
 });
 
 // Boot server with Vite integration
