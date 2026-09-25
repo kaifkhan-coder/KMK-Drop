@@ -8,8 +8,43 @@ import { FileContentInspectorModal } from './components/FileContentInspectorModa
 import { JavaSourceViewerModal } from './components/JavaSourceViewerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MobileSimulatorModal } from './components/MobileSimulatorModal';
-import { StagedPackageResult, ReceivedFileItem, NetworkStatus } from './types';
-import { Shield, Settings, Code2, Lock, Smartphone, HardDrive, Wifi } from 'lucide-react';
+import { UserSwitcherModal } from './components/UserSwitcherModal';
+import { StagedPackageResult, ReceivedFileItem, NetworkStatus, UserWorkspace } from './types';
+import { Shield, Settings, Code2, Lock, Smartphone, HardDrive, Wifi, User, Users } from 'lucide-react';
+
+const DEFAULT_WORKSPACE: UserWorkspace = {
+  userId: 'usr_alpha',
+  userName: 'Kaif Workstation #1',
+  avatarColor: 'from-cyan-500 to-blue-600',
+  deviceLabel: 'Host Rig',
+  createdAt: Date.now()
+};
+
+function getInitialWorkspaces(): { current: UserWorkspace; list: UserWorkspace[] } {
+  try {
+    const savedList = localStorage.getItem('kaifdrop_user_workspaces');
+    const savedActiveId = localStorage.getItem('kaifdrop_active_user_id');
+    let list: UserWorkspace[] = savedList ? JSON.parse(savedList) : [];
+    if (!Array.isArray(list) || list.length === 0) {
+      list = [
+        DEFAULT_WORKSPACE,
+        {
+          userId: 'usr_beta',
+          userName: 'Studio Lab Rig #2',
+          avatarColor: 'from-purple-500 to-indigo-600',
+          deviceLabel: 'Secondary Station',
+          createdAt: Date.now()
+        }
+      ];
+      localStorage.setItem('kaifdrop_user_workspaces', JSON.stringify(list));
+    }
+    const current = list.find((w) => w.userId === savedActiveId) || list[0];
+    localStorage.setItem('kaifdrop_active_user_id', current.userId);
+    return { current, list };
+  } catch {
+    return { current: DEFAULT_WORKSPACE, list: [DEFAULT_WORKSPACE] };
+  }
+}
 
 export default function App() {
   // Stealth Shield preference (default OFF for simple direct start without password)
@@ -20,6 +55,11 @@ export default function App() {
 
   // Locked state: Always false on start for immediate password-free access
   const [isLocked, setIsLocked] = useState<boolean>(false);
+
+  // User workspace isolation state
+  const [workspaces, setWorkspaces] = useState<UserWorkspace[]>(() => getInitialWorkspaces().list);
+  const [currentWorkspace, setCurrentWorkspace] = useState<UserWorkspace>(() => getInitialWorkspaces().current);
+  const [showUserModal, setShowUserModal] = useState<boolean>(false);
 
   // Network and transferred files state
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(null);
@@ -37,15 +77,19 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showMobileSimulator, setShowMobileSimulator] = useState(false);
 
-  // Poll network status & received files once unlocked
+  // Poll network status & received files partitioned by active user
   useEffect(() => {
     if (isLocked) return;
 
     const fetchData = async () => {
       try {
         const [netRes, recRes] = await Promise.all([
-          fetch('/api/network/status'),
-          fetch('/api/transfer/received')
+          fetch('/api/network/status', {
+            headers: { 'x-user-id': currentWorkspace.userId }
+          }),
+          fetch('/api/transfer/received', {
+            headers: { 'x-user-id': currentWorkspace.userId }
+          })
         ]);
         if (netRes.ok) {
           const netData = await netRes.json();
@@ -63,7 +107,40 @@ export default function App() {
     fetchData();
     const interval = setInterval(fetchData, 2500);
     return () => clearInterval(interval);
-  }, [isLocked]);
+  }, [isLocked, currentWorkspace.userId]);
+
+  const handleSelectWorkspace = (ws: UserWorkspace) => {
+    setCurrentWorkspace(ws);
+    localStorage.setItem('kaifdrop_active_user_id', ws.userId);
+    setActivePackage(null);
+    setReceivedFiles([]);
+  };
+
+  const handleCreateWorkspace = (name: string, deviceLabel = 'Workstation') => {
+    const newWs: UserWorkspace = {
+      userId: 'usr_' + Math.random().toString(36).substring(2, 8),
+      userName: name,
+      avatarColor: 'from-emerald-500 to-teal-600',
+      deviceLabel,
+      createdAt: Date.now()
+    };
+    const updated = [...workspaces, newWs];
+    setWorkspaces(updated);
+    setCurrentWorkspace(newWs);
+    localStorage.setItem('kaifdrop_user_workspaces', JSON.stringify(updated));
+    localStorage.setItem('kaifdrop_active_user_id', newWs.userId);
+    setActivePackage(null);
+    setReceivedFiles([]);
+  };
+
+  const handleUpdateWorkspaceName = (id: string, newName: string) => {
+    const updated = workspaces.map((w) => (w.userId === id ? { ...w, userName: newName } : w));
+    setWorkspaces(updated);
+    if (currentWorkspace.userId === id) {
+      setCurrentWorkspace((prev) => ({ ...prev, userName: newName }));
+    }
+    localStorage.setItem('kaifdrop_user_workspaces', JSON.stringify(updated));
+  };
 
   const handleUnlock = () => {
     setIsLocked(false);
@@ -80,7 +157,9 @@ export default function App() {
 
   const handleRefreshReceived = async () => {
     try {
-      const res = await fetch('/api/transfer/received');
+      const res = await fetch('/api/transfer/received', {
+        headers: { 'x-user-id': currentWorkspace.userId }
+      });
       if (res.ok) {
         const data = await res.json();
         setReceivedFiles(data.files || []);
@@ -95,16 +174,18 @@ export default function App() {
     try {
       const blob = new Blob(
         [
-          `// Mobile Student Submission\nStudent: Khan Mohammed Kaif (3D Animation Suite)\nStatus: Verified Peer Transfer\n`
+          `// Mobile Student Submission\nStudent: Khan Mohammed Kaif\nWorkspace: ${currentWorkspace.userName} (${currentWorkspace.userId})\nStatus: Verified Peer Transfer\n`
         ],
         { type: 'text/plain' }
       );
       const file = new File([blob], `lab_assignment_${Date.now().toString().slice(-4)}.kaif`, { type: 'text/plain' });
       const formData = new FormData();
+      formData.append('userId', currentWorkspace.userId);
       formData.append('files', file);
 
       await fetch('/api/transfer/upload', {
         method: 'POST',
+        headers: { 'x-user-id': currentWorkspace.userId },
         body: formData
       });
       handleRefreshReceived();
@@ -142,6 +223,26 @@ export default function App() {
 
         {/* Header Actions */}
         <div className="flex items-center gap-2">
+          {/* User Workspace Switcher Button */}
+          <button
+            onClick={() => setShowUserModal(true)}
+            className="flex items-center gap-2 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-cyan-800/60 hover:border-cyan-500 rounded-lg text-xs transition-colors shadow-sm"
+            title="Switch User Workspace / Create Separate User Space"
+          >
+            <div className={`w-5 h-5 rounded-md bg-gradient-to-br ${currentWorkspace.avatarColor} flex items-center justify-center text-[10px] text-white font-bold shrink-0`}>
+              {currentWorkspace.userName.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex flex-col text-left">
+              <div className="flex items-center gap-1.5 leading-tight">
+                <span className="font-semibold text-neutral-200 text-xs max-w-[120px] truncate">{currentWorkspace.userName}</span>
+                <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950 px-1 py-0.2 rounded border border-cyan-800/60">
+                  {currentWorkspace.userId}
+                </span>
+              </div>
+              <span className="text-[9px] text-cyan-400/80 font-mono">Separate Per User</span>
+            </div>
+          </button>
+
           {/* Java Source Code & Maven Project View */}
           <button
             onClick={() => setShowJavaSourceModal(true)}
@@ -192,6 +293,8 @@ export default function App() {
         {/* Left Control Panel: PC to Mobile Drop Zone */}
         <div className="h-full overflow-hidden">
           <LeftDropZone
+            userId={currentWorkspace.userId}
+            userName={currentWorkspace.userName}
             onPackageStaged={(pkg) => setActivePackage(pkg)}
             onInspectFile={(name, type, url) => setInspectingFile({ name, type, downloadUrl: url })}
             onInspect3D={(name) => setInspecting3DFile(name)}
@@ -201,6 +304,8 @@ export default function App() {
         {/* Right Control Panel: Mobile to PC Sync Portal */}
         <div className="h-full overflow-hidden">
           <RightSyncPortal
+            userId={currentWorkspace.userId}
+            userName={currentWorkspace.userName}
             receivedFiles={receivedFiles}
             onRefresh={handleRefreshReceived}
             onOpenMobileSimulator={() => setShowMobileSimulator(true)}
@@ -216,6 +321,18 @@ export default function App() {
           onLockTerminal={handleLockTerminal}
         />
       </footer>
+
+      {/* User Workspace Switcher Modal */}
+      {showUserModal && (
+        <UserSwitcherModal
+          currentWorkspace={currentWorkspace}
+          workspaces={workspaces}
+          onSelectWorkspace={handleSelectWorkspace}
+          onCreateWorkspace={handleCreateWorkspace}
+          onUpdateWorkspaceName={handleUpdateWorkspaceName}
+          onClose={() => setShowUserModal(false)}
+        />
+      )}
 
       {/* 3D Mesh Inspector Modal */}
       {inspecting3DFile && (
@@ -253,6 +370,8 @@ export default function App() {
       {/* Mobile Simulator Modal */}
       {showMobileSimulator && (
         <MobileSimulatorModal
+          userId={currentWorkspace.userId}
+          userName={currentWorkspace.userName}
           pkgName={activePackage?.name}
           downloadUrl={activePackage?.directDownloadUrl}
           onUploaded={handleRefreshReceived}

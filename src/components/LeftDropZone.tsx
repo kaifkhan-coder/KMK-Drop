@@ -5,12 +5,16 @@ import { StagedPackageResult, StagedFile } from '../types';
 import { EnlargeQrModal } from './EnlargeQrModal';
 
 interface LeftDropZoneProps {
+  userId: string;
+  userName: string;
   onPackageStaged: (pkg: StagedPackageResult) => void;
   onInspectFile: (fileName: string, type: 'text_kaif' | 'pdf' | '3d_animation' | 'standard', downloadUrl?: string) => void;
   onInspect3D: (fileName: string) => void;
 }
 
 export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
+  userId,
+  userName,
   onPackageStaged,
   onInspectFile,
   onInspect3D
@@ -29,22 +33,21 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
   const [showEnlargeModal, setShowEnlargeModal] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addMoreInputRef = useRef<HTMLInputElement>(null);
-  const hasAutoLoadedRef = useRef(false);
 
-  // Auto-stage default starter suite on mount so Left QR code is immediately active
+  // Auto-stage default starter suite on mount or when user workspace switches
   useEffect(() => {
-    if (!hasAutoLoadedRef.current) {
-      hasAutoLoadedRef.current = true;
-      loadTestStagingSuite();
-    }
-  }, []);
+    loadTestStagingSuite();
+  }, [userId]);
 
   // Request zero-403 public bridge URL if not already generated
   const ensurePublicBridge = async (stageId: string) => {
     if (isGeneratingBridge) return;
     setIsGeneratingBridge(true);
     try {
-      const res = await fetch(`/api/transfer/public-bridge/${stageId}`, { method: 'POST' });
+      const res = await fetch(`/api/transfer/public-bridge/${stageId}`, {
+        method: 'POST',
+        headers: { 'x-user-id': userId }
+      });
       const data = await res.json();
       if (data?.publicBridgeUrl) {
         setActivePackage((prev) => prev ? { ...prev, publicBridgeUrl: data.publicBridgeUrl } : prev);
@@ -68,13 +71,13 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
           // Trigger asynchronous generation
           ensurePublicBridge(activePackage.stageId);
           // Fallback to direct download until bridge is ready
-          targetUrl = `${window.location.origin}/m?pkg=${activePackage.stageId}`;
+          targetUrl = `${window.location.origin}/m?user=${userId}&pkg=${activePackage.stageId}`;
         }
       } else if (hostMode === 'local' && localIpInput.trim()) {
         const base = localIpInput.startsWith('http') ? localIpInput : `http://${localIpInput}`;
-        targetUrl = `${base}/m?pkg=${activePackage.stageId}`;
+        targetUrl = `${base}/m?user=${userId}&pkg=${activePackage.stageId}`;
       } else {
-        targetUrl = `${window.location.origin}/m?pkg=${activePackage.stageId}`;
+        targetUrl = `${window.location.origin}/m?user=${userId}&pkg=${activePackage.stageId}`;
       }
 
       setQrTargetUrl(targetUrl);
@@ -91,7 +94,7 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
         .then((url) => setQrDataUrl(url))
         .catch((err) => console.error('QR code generation failed:', err));
     }
-  }, [activePackage, hostMode, localIpInput, activePackage?.publicBridgeUrl]);
+  }, [activePackage, hostMode, localIpInput, activePackage?.publicBridgeUrl, userId]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -136,12 +139,14 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
       const allFiles = [...existingRaw, ...newFiles];
 
       const formData = new FormData();
+      formData.append('userId', userId);
       allFiles.forEach((file) => {
         formData.append('files', file);
       });
 
       const res = await fetch('/api/transfer/stage', {
         method: 'POST',
+        headers: { 'x-user-id': userId },
         body: formData
       });
 
@@ -247,9 +252,12 @@ export const LeftDropZone: React.FC<LeftDropZoneProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
         <div>
-          <h2 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+          <h2 className="text-sm font-bold text-neutral-100 flex items-center gap-2 flex-wrap">
             <span>PC to Mobile Drop Zone</span>
             <span className="text-[11px] font-mono font-normal text-cyan-400">· Staging Phase</span>
+            <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 border border-cyan-800/60 px-2 py-0.5 rounded flex items-center gap-1">
+              👤 {userName} ({userId})
+            </span>
           </h2>
           <p className="text-xs text-neutral-400">
             Drag files directly from local system explorer to compile &amp; generate live QR code

@@ -43,7 +43,7 @@ if (!fs.existsSync(STAGING_DIR)) fs.mkdirSync(STAGING_DIR, { recursive: true });
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-File-Name');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-File-Name, X-User-Id');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -59,9 +59,33 @@ const upload = multer({
   limits: { fileSize: 250 * 1024 * 1024 } // 250MB limit
 });
 
-// In-memory registry of staged transfers and received files
+// User-isolated storage directory resolver
+function getUserStorageDirs(userId: string) {
+  const safeUserId = String(userId || 'default_user').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const userRoot = path.join(STORAGE_DIR, 'users', safeUserId);
+  const userStaging = path.join(userRoot, 'staged');
+  const userUpload = path.join(userRoot, 'received');
+
+  if (!fs.existsSync(userRoot)) fs.mkdirSync(userRoot, { recursive: true });
+  if (!fs.existsSync(userStaging)) fs.mkdirSync(userStaging, { recursive: true });
+  if (!fs.existsSync(userUpload)) fs.mkdirSync(userUpload, { recursive: true });
+
+  return { userRoot, userStaging, userUpload, safeUserId };
+}
+
+// Extract requesting user ID from headers, query parameters, or form body
+function resolveUserId(req: express.Request): string {
+  const fromHeader = req.headers['x-user-id'] as string;
+  const fromQuery = (req.query.user || req.query.userId) as string;
+  const fromBody = req.body?.userId as string;
+  const rawId = fromHeader || fromQuery || fromBody || 'usr_default';
+  return String(rawId).trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// In-memory registry of staged transfers and received files partitioned by user
 interface StagedPackage {
   id: string;
+  userId: string;
   name: string;
   files: {
     originalName: string;
@@ -82,6 +106,7 @@ interface StagedPackage {
 
 interface ReceivedFileRecord {
   id: string;
+  userId: string;
   originalName: string;
   storedPath: string;
   size: number;
@@ -199,10 +224,14 @@ function getActiveNetworkInterfaces() {
 
 // Network node status & interface scan
 app.get('/api/network/status', (req, res) => {
+  const userId = resolveUserId(req);
   const netInfo = getActiveNetworkInterfaces();
   const hostHeader = req.get('host') || `localhost:${PORT}`;
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const externalAppUrl = process.env.APP_URL || `${protocol}://${hostHeader}`;
+
+  const userStagedCount = Array.from(stagedRegistry.values()).filter(p => p.userId === userId).length;
+  const userReceivedCount = receivedRegistry.filter(r => r.userId === userId).length;
 
   res.json({
     status: 'ACTIVE_LISTENING',
@@ -214,8 +243,9 @@ app.get('/api/network/status', (req, res) => {
       totalBytesServed,
       totalBytesReceived,
       currentBandwidthBytesPerSec: lastTransferSpeedBytesPerSec,
-      stagedPackagesCount: stagedRegistry.size,
-      receivedFilesCount: receivedRegistry.length
+      stagedPackagesCount: userStagedCount,
+      receivedFilesCount: userReceivedCount,
+      activeUserId: userId
     }
   });
 });
@@ -251,13 +281,16 @@ app.post('/api/auth/verify', (req, res) => {
   res.json(result);
 });
 
-// Dynamic File Interception & Watermark Pipeline Staging
+// Dynamic File Interception & Watermark Pipeline Staging (Partitioned per User)
 app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
   try {
     const rawFiles = req.files as Express.Multer.File[];
     if (!rawFiles || rawFiles.length === 0) {
       return res.status(400).json({ error: 'No files provided for staging' });
     }
+
+    const userId = resolveUserId(req);
+    const { userStaging } = getUserStorageDirs(userId);
 
     const packageId = 'pkg_' + crypto.randomBytes(6).toString('hex');
     const processedFiles: StagedPackage['files'] = [];
@@ -326,7 +359,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
       }
 
       const outFileName = `${packageId}_${file.originalname}`;
-      const outPath = path.join(STAGING_DIR, outFileName);
+      const outPath = path.join(userStaging, outFileName);
       fs.writeFileSync(outPath, finalBuffer);
 
       // Clean temp file
@@ -360,7 +393,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
 
       // Inject companion metadata ledger if 3D staging formats are present
       if (has3DAsset) {
-        const manifestContent = `Project Architect: Khan Mohammed Kaif (3D Animation Suite)\nTimestamp: ${new Date().toISOString()}\nSecured Pipeline: KaifDrop-Secure Active Mesh Guard\nIntegrity: Verified Unaltered Binary Geometry\n`;
+        const manifestContent = `Project Architect: Khan Mohammed Kaif (3D Animation Suite)\nTimestamp: ${new Date().toISOString()}\nSecured Pipeline: KaifDrop-Secure Active Mesh Guard\nIntegrity: Verified Unaltered Binary Geometry\nUser Workspace: ${userId}\n`;
         zip.file('animation_manifest.kaif', manifestContent);
       }
 
@@ -371,7 +404,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
       });
 
       const zipName = `${packageId}_bundle.zip`;
-      zipFilePath = path.join(STAGING_DIR, zipName);
+      zipFilePath = path.join(userStaging, zipName);
       fs.writeFileSync(zipFilePath, zipBuffer);
       totalBytes = zipBuffer.length;
     }
@@ -379,6 +412,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
     // Generate JWT handshake for this specific transfer
     const jwtToken = signJwt({
       stageId: packageId,
+      userId,
       fileCount: processedFiles.length,
       bytes: totalBytes,
       isZip: isZipMatrix,
@@ -387,6 +421,7 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
 
     const stagedPkg: StagedPackage = {
       id: packageId,
+      userId,
       name: processedFiles.length === 1 && !isZipMatrix ? processedFiles[0].originalName : `KaifDrop_Bundle_${packageId}.zip`,
       files: processedFiles,
       isZipMatrix,
@@ -419,11 +454,12 @@ app.post('/api/transfer/stage', upload.array('files'), async (req, res) => {
     const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
     const baseAppUrl = process.env.APP_URL || `${protocol}://${hostHeader}`;
     const directDownloadUrl = `/api/transfer/download/${packageId}`;
-    const mobileLandingUrl = `${baseAppUrl}/m?pkg=${packageId}`;
+    const mobileLandingUrl = `${baseAppUrl}/m?user=${userId}&pkg=${packageId}`;
 
     res.json({
       success: true,
       stageId: packageId,
+      userId,
       name: stagedPkg.name,
       totalBytes,
       files: processedFiles.map(f => ({
@@ -548,7 +584,7 @@ app.get('/api/transfer/download/:stageId', (req, res) => {
   res.status(404).send('Transfer binary not accessible on disk');
 });
 
-// Mobile to PC Sync Portal - Upload Endpoint
+// Mobile to PC Sync Portal - Upload Endpoint (Partitioned per User)
 app.post('/api/transfer/upload', upload.array('files'), (req, res) => {
   try {
     const rawFiles = req.files as Express.Multer.File[];
@@ -556,17 +592,21 @@ app.post('/api/transfer/upload', upload.array('files'), (req, res) => {
       return res.status(400).json({ error: 'No files received from mobile client' });
     }
 
+    const userId = resolveUserId(req);
+    const { userUpload } = getUserStorageDirs(userId);
+
     const senderIp = req.ip || req.connection.remoteAddress || 'Unknown Mobile Peer';
     const receivedRecords: ReceivedFileRecord[] = [];
     let batchBytes = 0;
 
     for (const f of rawFiles) {
-      const destPath = path.join(UPLOAD_DIR, `${Date.now()}_${f.originalname}`);
+      const destPath = path.join(userUpload, `${Date.now()}_${f.originalname}`);
       fs.copyFileSync(f.path, destPath);
       try { fs.unlinkSync(f.path); } catch (_) {}
 
       const record: ReceivedFileRecord = {
         id: 'rec_' + crypto.randomBytes(5).toString('hex'),
+        userId,
         originalName: f.originalname,
         storedPath: destPath,
         size: f.size,
@@ -584,7 +624,8 @@ app.post('/api/transfer/upload', upload.array('files'), (req, res) => {
 
     res.json({
       success: true,
-      message: `Successfully received ${receivedRecords.length} file(s) into PC designated directory`,
+      userId,
+      message: `Successfully received ${receivedRecords.length} file(s) into workspace (${userId}) designated directory`,
       received: receivedRecords
     });
   } catch (err: any) {
@@ -593,12 +634,17 @@ app.post('/api/transfer/upload', upload.array('files'), (req, res) => {
   }
 });
 
-// List files received from mobile
+// List files received from mobile (Filtered by User)
 app.get('/api/transfer/received', (req, res) => {
+  const userId = resolveUserId(req);
+  const { userUpload } = getUserStorageDirs(userId);
+  const userFiles = receivedRegistry.filter(r => r.userId === userId);
+
   res.json({
-    files: receivedRegistry,
-    totalCount: receivedRegistry.length,
-    destinationDirectory: UPLOAD_DIR
+    files: userFiles,
+    totalCount: userFiles.length,
+    destinationDirectory: userUpload,
+    userId
   });
 });
 
@@ -612,14 +658,20 @@ app.get('/api/transfer/received/download/:id', (req, res) => {
   res.sendFile(record.storedPath);
 });
 
-// Clear received history
+// Clear received history for active user
 app.post('/api/transfer/received/clear', (req, res) => {
-  receivedRegistry.length = 0;
-  res.json({ success: true });
+  const userId = resolveUserId(req);
+  for (let i = receivedRegistry.length - 1; i >= 0; i--) {
+    if (receivedRegistry[i].userId === userId) {
+      receivedRegistry.splice(i, 1);
+    }
+  }
+  res.json({ success: true, userId });
 });
 
 // Dedicated Mobile Landing Portal (for camera QR scanner or direct link)
 app.get('/mobile', (req, res) => {
+  const targetUser = resolveUserId(req);
   const pkgId = req.query.pkg as string;
   const jwt = req.query.jwt as string;
   const hostHeader = req.get('host') || `localhost:${PORT}`;
@@ -635,8 +687,10 @@ app.get('/mobile', (req, res) => {
       filesCount: pkg.files.length,
       downloadUrl: `/api/transfer/download/${pkgId}`
     };
-  } else if (stagedRegistry.size > 0) {
-    const latest = Array.from(stagedRegistry.values()).pop();
+  } else {
+    // Only show latest package staged by this specific user
+    const userPackages = Array.from(stagedRegistry.values()).filter(p => p.userId === targetUser);
+    const latest = userPackages.pop();
     if (latest) {
       pkgInfo = {
         name: latest.name,
@@ -792,6 +846,11 @@ app.get('/mobile', (req, res) => {
       <p class="sub">Peer-to-Peer Direct Transfer · Khan Mohammed Kaif Protocol</p>
     </div>
 
+    <div style="background: #18181b; border: 1px solid #27272a; padding: 10px 14px; border-radius: 10px; margin-bottom: 18px; font-size: 12px; display: flex; align-items: center; justify-content: space-between;">
+      <span style="color: #e4e4e7;">👤 Target Channel: <strong style="color: #38bdf8; font-family: monospace;">${targetUser}</strong></span>
+      <span style="color: #06b6d4; font-size: 11px; background: rgba(6,182,212,0.1); border: 1px solid rgba(6,182,212,0.3); padding: 2px 8px; border-radius: 9999px;">Private Workspace</span>
+    </div>
+
     ${
       pkgInfo
         ? `
@@ -912,6 +971,7 @@ app.get('/mobile', (req, res) => {
       statusMsg.textContent = 'Uploading files via local micro-HTTP socket...';
 
       const formData = new FormData();
+      formData.append('userId', '${targetUser}');
       accumulatedFiles.forEach(f => {
         formData.append('files', f);
       });
@@ -919,6 +979,7 @@ app.get('/mobile', (req, res) => {
       try {
         const res = await fetch('/api/transfer/upload', {
           method: 'POST',
+          headers: { 'x-user-id': '${targetUser}' },
           body: formData
         });
         const data = await res.json();

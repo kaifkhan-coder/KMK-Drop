@@ -1,3 +1,11 @@
+export interface UserWorkspace {
+  userId: string;
+  userName: string;
+  avatarColor: string;
+  deviceLabel: string;
+  createdAt: number;
+}
+
 export interface StagedFile {
   name: string;
   size: number;
@@ -25,6 +33,7 @@ export interface StagedPackageResult {
   publicBridgeUrl?: string;
   has3DAsset: boolean;
   manifestInjected: boolean;
+  userId?: string;
 }
 
 export interface ReceivedFileItem {
@@ -35,6 +44,7 @@ export interface ReceivedFileItem {
   receivedAt: number;
   senderIp: string;
   mimeType: string;
+  userId?: string;
 }
 
 export interface NetworkStatus {
@@ -60,5 +70,7 @@ export interface NetworkStatus {
     currentBandwidthBytesPerSec: number;
     stagedPackagesCount: number;
     receivedFilesCount: number;
+    activeUserId?: string;
   };
 }
+

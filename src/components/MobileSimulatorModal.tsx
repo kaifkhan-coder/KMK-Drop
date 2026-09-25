@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Smartphone, Upload, CheckCircle2, AlertCircle, X, ExternalLink } from 'lucide-react';
 
 interface MobileSimulatorModalProps {
+  userId: string;
+  userName: string;
   onClose: () => void;
   onUploaded: () => void;
   downloadUrl?: string;
@@ -9,6 +11,8 @@ interface MobileSimulatorModalProps {
 }
 
 export const MobileSimulatorModal: React.FC<MobileSimulatorModalProps> = ({
+  userId,
+  userName,
   onClose,
   onUploaded,
   downloadUrl,
@@ -37,16 +41,18 @@ export const MobileSimulatorModal: React.FC<MobileSimulatorModalProps> = ({
     setStatusMessage({ text: 'Streaming assets via micro-HTTP socket...', type: 'info' });
 
     const formData = new FormData();
+    formData.append('userId', userId);
     selectedFiles.forEach((file) => formData.append('files', file));
 
     try {
       const res = await fetch('/api/transfer/upload', {
         method: 'POST',
+        headers: { 'x-user-id': userId },
         body: formData
       });
       const data = await res.json();
       if (res.ok) {
-        setStatusMessage({ text: '✓ Successfully transmitted to Desktop PC directory!', type: 'success' });
+        setStatusMessage({ text: `✓ Transmitted to ${userName} (${userId}) directory!`, type: 'success' });
         setSelectedFiles([]);
         onUploaded();
       } else {
@@ -115,6 +121,12 @@ export const MobileSimulatorModal: React.FC<MobileSimulatorModalProps> = ({
             </div>
             <h2 className="text-sm font-bold text-neutral-100">KaifDrop Mobile Portal</h2>
             <p className="text-[11px] text-neutral-400">Micro-HTTP Direct Transfer Handshake</p>
+          </div>
+
+          {/* Connected Workstation Banner */}
+          <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-lg flex items-center justify-between text-xs">
+            <span className="text-neutral-300">👤 Channel: <strong className="text-cyan-300 font-mono">{userId}</strong></span>
+            <span className="text-[10px] text-neutral-400 truncate max-w-[110px]">{userName}</span>
           </div>
 
           {/* Download card if package staged on PC */}

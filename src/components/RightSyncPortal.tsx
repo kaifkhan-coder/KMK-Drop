@@ -5,6 +5,8 @@ import { ReceivedFileItem } from '../types';
 import { EnlargeQrModal } from './EnlargeQrModal';
 
 interface RightSyncPortalProps {
+  userId: string;
+  userName: string;
   receivedFiles: ReceivedFileItem[];
   onRefresh: () => void;
   onOpenMobileSimulator: () => void;
@@ -12,6 +14,8 @@ interface RightSyncPortalProps {
 }
 
 export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
+  userId,
+  userName,
   receivedFiles,
   onRefresh,
   onOpenMobileSimulator,
@@ -31,7 +35,7 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
       targetBase = localIpInput.startsWith('http') ? localIpInput : `http://${localIpInput}`;
     }
 
-    const url = `${targetBase}/m`;
+    const url = `${targetBase}/m?user=${userId}`;
     setMobilePortalUrl(url);
 
     QRCode.toDataURL(url, {
@@ -45,7 +49,7 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
     })
       .then((qr) => setPairingQrUrl(qr))
       .catch((err) => console.error('Pairing QR generation failed:', err));
-  }, [hostMode, localIpInput]);
+  }, [hostMode, localIpInput, userId]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -54,9 +58,12 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
   };
 
   const handleClearHistory = async () => {
-    if (!confirm('Clear all received file records from PC storage?')) return;
+    if (!confirm(`Clear received file records for workspace ${userName} (${userId})?`)) return;
     try {
-      await fetch('/api/transfer/received/clear', { method: 'POST' });
+      await fetch('/api/transfer/received/clear', {
+        method: 'POST',
+        headers: { 'x-user-id': userId }
+      });
       onRefresh();
     } catch (e) {
       console.error(e);
@@ -68,9 +75,12 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
         <div>
-          <h2 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+          <h2 className="text-sm font-bold text-neutral-100 flex items-center gap-2 flex-wrap">
             <span>Mobile to PC Sync Portal</span>
             <span className="text-[11px] font-mono font-normal text-emerald-400">· Listening on 8080/3000</span>
+            <span className="text-[10px] font-mono text-emerald-300 bg-emerald-950/80 border border-emerald-800/60 px-2 py-0.5 rounded flex items-center gap-1">
+              👤 {userName} ({userId})
+            </span>
           </h2>
           <p className="text-xs text-neutral-400">
             Fixed pairing portal for receiving files from mobile cameras and students
@@ -79,7 +89,7 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
 
         <div className="flex items-center gap-2">
           <a
-            href="/mobile"
+            href={`/mobile?user=${userId}`}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-neutral-200 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg transition-colors"
