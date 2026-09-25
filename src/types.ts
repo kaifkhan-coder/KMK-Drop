@@ -17,6 +17,7 @@ export interface StagedFile {
 }
 
 export interface StagedPackageResult {
+  success?: boolean;
   stageId: string;
   name: string;
   totalBytes: number;

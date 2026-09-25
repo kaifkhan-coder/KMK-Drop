@@ -63,7 +63,10 @@ export const RightSyncPortal: React.FC<RightSyncPortalProps> = ({
       await fetch('/api/transfer/received/clear', {
         method: 'POST',
         headers: { 'x-user-id': userId }
-      });
+      }).catch(() => null);
+      try {
+        localStorage.removeItem(`kaifdrop_received_${userId}`);
+      } catch (_) {}
       onRefresh();
     } catch (e) {
       console.error(e);
