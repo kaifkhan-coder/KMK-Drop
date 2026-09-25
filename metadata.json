@@ -1,0 +1,8 @@
+{
+  "name": "KaifDrop-Secure",
+  "description": "Stealth-protected local network data utility and 3D animation transfer engine with dynamic watermarking and peer sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
